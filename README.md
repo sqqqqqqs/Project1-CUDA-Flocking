@@ -14,83 +14,87 @@ This project implements Reynolds-style boid flocking with CUDA using cohesion, s
 - **Scattered grid:** boids are grouped by grid cell using sorted indices, but their position and velocity data remain scattered.
 - **Coherent grid:** position and velocity data are reordered by grid cell for more contiguous memory access.
 
+Separate input and output velocity buffers ensure that every boid reads a consistent state during each simulation step.
+
 ## Performance Analysis
 
 ### Methodology
 
-- Release x64
-- VSync and NVIDIA Max Frame Rate disabled
-- Five FPS readings averaged per configuration
-- Default block size: 128
-- Time step: 0.2
-- Fixed window size and camera
+- Build configuration: **Release x64**
+- Vertical synchronization: **Off**
+- NVIDIA Max Frame Rate: **Off**
+- Time step: **0.2**
+- Default block size: **128 threads**
+- Default grid configuration: **8-cell search with cell width $2r$**
+- The scaling graphs use one stabilized FPS reading per configuration after warm-up.
+- All comparisons used the same machine and executable window size.
 
-### Boid Count — Visualization Off
+### Effect of boid count without visualization
 
 ![Performance without visualization](images/performance_no_visualization.png)
 
-| Boids | Naive | Scattered | Coherent |
+| Boids | Naive FPS | Scattered FPS | Coherent FPS |
 |---:|---:|---:|---:|
-| 1,000 | 1093.8 | 1336.4 | 1434.2 |
-| 5,000 | 819.0 | 1145.2 | 1203.0 |
-| 20,000 | 302.2 | 1076.8 | 1216.2 |
+| 5,000 | 851.0 | 1144.0 | 1224.0 |
+| 10,000 | 519.0 | 1124.0 | 1205.0 |
+| 25,000 | 251.0 | 1063.0 | 1173.0 |
+| 50,000 | 102.0 | 860.0 | 1167.0 |
+| 100,000 | 25.2 | 589.0 | 1069.0 |
+| 200,000 | 8.2 | 281.0 | 634.0 |
+| 500,000 | 1.4 | 77.3 | 445.0 |
+| 1,000,000 | — | 20.6 | 187.0 |
 
-Naive performance decreases sharply as the number of boids increases because its neighbor search is $O(N^2)$. The grid methods scale better because each boid only checks nearby cells instead of the entire array.
+Naive performance decreases rapidly because doubling the boid count approximately quadruples the number of pairwise checks. The uniform-grid methods scale much better by limiting the search to nearby cells. They eventually slow as well because a fixed simulation volume causes more boids to occupy each cell. At one million boids, the coherent grid was about **9.1 times faster** than the scattered grid because its neighbor data is stored contiguously.
 
-From 1,000 to 20,000 boids, Naive FPS decreased by 72.4%, compared with 19.4% for Scattered and 15.2% for Coherent.
-
-### Boid Count — Visualization On
+### Effect of visualization
 
 ![Performance with visualization](images/performance_with_visualization.png)
 
-| Boids | Naive | Scattered | Coherent |
+| Boids | Naive FPS | Scattered FPS | Coherent FPS |
 |---:|---:|---:|---:|
-| 1,000 | 1028.0 | 950.8 | 938.8 |
-| 5,000 | 681.4 | 902.6 | 933.0 |
-| 20,000 | 257.2 | 845.0 | 912.0 |
+| 5,000 | 672.0 | 873.0 | 959.0 |
+| 10,000 | 414.0 | 824.0 | 955.0 |
+| 25,000 | 216.0 | 799.0 | 917.0 |
+| 50,000 | 95.4 | 675.0 | 924.0 |
+| 100,000 | 23.9 | 512.0 | 879.0 |
+| 200,000 | 7.6 | 241.0 | 554.0 |
+| 500,000 | 1.2 | 73.3 | 383.0 |
+| 1,000,000 | — | 20.2 | 151.8 |
 
-Visualization reduces FPS because every frame also copies simulation data to graphics buffers and renders the particles. At 1,000 boids, grid construction costs more than it saves. At larger boid counts, both grid methods outperform Naive.
+Visualization lowers FPS because each frame also updates the graphics buffer and renders the particles. The same overall trend remains: Naive search falls quickly, while both grid methods support much larger simulations. At high boid counts the coherent grid retains the largest advantage.
 
-### Block Size
+### Effect of block size and block count
 
-This test used 20,000 boids with visualization disabled.
+This experiment used **50,000 boids** with visualization disabled. The number of blocks is $\lceil N / \text{blockSize} \rceil$. The graph normalizes each implementation to its own fastest result so the effect of block size is visible despite the algorithms' different absolute framerates.
 
 ![Block size performance](images/block_size_performance.png)
 
-| Block Size | Block Count | Naive | Scattered | Coherent |
+| Threads per block | Block count | Naive FPS | Scattered FPS | Coherent FPS |
 |---:|---:|---:|---:|---:|
-| 32 | 625 | 311.4 | 1097.6 | 1199.0 |
-| 128 | 157 | 302.2 | 1076.8 | 1216.2 |
-| 512 | 40 | 295.8 | 1069.6 | 1197.4 |
+| 32 | 1563 | 68.9 | 795 | 1117 |
+| 128 | 391 | 96.9 | 830 | 1082 |
+| 512 | 98 | 95.9 | 845 | 1158 |
+| 1024 | 49 | 97.6 | 829 | 1135 |
 
-Block size had a relatively small effect compared with the neighbor-search algorithm. Naive and Scattered performed best at 32 threads, while Coherent performed best at 128. This likely reflects differences in occupancy, register use, and scheduling flexibility.
+The Naive implementation was substantially slower at 32 threads per block. The grid implementations changed by less than 7% across the tested sizes and both reached their highest FPS at 512 threads. Increasing the block size to 1024 provided no further improvement. A block size of 128 remains a reasonable default because it performs close to the best result for all three implementations.
 
-### Coherent vs. Scattered Grid
+### Coherent versus scattered grid
 
-At 20,000 boids, Coherent reached 1216.2 FPS compared with 1076.8 FPS for Scattered:
+In a five-run controlled test with 20,000 boids, visualization disabled, and block size 128, the coherent grid averaged **1216.2 FPS**, compared with **1076.8 FPS** for the scattered grid, an improvement of about **12.9%**.
 
-$$
-\frac{1216.2-1076.8}{1076.8}\times100\%
-\approx12.9\%
-$$
+This improvement was expected because boids in the same cell are contiguous and neighbor access no longer requires an extra particle-index lookup. The benefit is partially offset by the cost of rearranging the position and velocity arrays every frame.
 
-This improvement was expected because boids in the same cell are stored contiguously, improving memory locality and removing one level of indirection. However, Coherent also pays an additional cost to reorder position and velocity data each frame.
+### Eight-cell versus 27-cell search
 
-### 8-Cell vs. 27-Cell Search
+A separate five-run test used 20,000 boids, visualization disabled, and block size 128.
 
-This test used 20,000 boids, visualization disabled, and a block size of 128.
-
-| Configuration | Average FPS |
+| Grid configuration | Average FPS |
 |---|---:|
-| 8 cells, width $2r$ | 1123.8 |
-| 27 cells, width $r$ | 1224.2 |
+| 8 cells, cell width $2r$ | 1123.8 |
+| 27 cells, cell width $r$ | 1224.2 |
 
-The 27-cell version was approximately 8.9% faster. Although it checks more cells, those cells are smaller:
+The 27-cell version was approximately **8.9% faster**. Although it visits more cells, each cell is smaller. The eight-cell configuration examines a candidate volume proportional to $8(2r)^3 = 64r^3$, while the 27-cell configuration examines $27r^3$. In this test, reducing candidate boids and distance calculations outweighed the overhead of checking more cell ranges.
 
-$$
-8(2r)^3=64r^3,\qquad 27(r)^3=27r^3
-$$
-
-The smaller candidate volume reduced the number of boid distance checks enough to offset the additional cell accesses.
+## Build Notes
 
 **CMake modifications:** None.
